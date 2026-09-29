@@ -23,8 +23,11 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Route,
+  Info,
 } from "lucide-react";
 import { Tooltip, Popover, Drawer } from "antd";
+import { message } from "@/utils/antdMessage";
 import type { ResolvedModel } from "../../../api/types";
 import type { KnowledgeBase } from "../../../api/modules/knowledgeBases";
 import type { SkillSpec } from "../../Agent/Skills/useSkills";
@@ -33,17 +36,20 @@ import type { AgentSubagentSummary } from "../../../api/modules/subagents";
 import {
   modelOptionLabel,
   modelOptionValue,
-  modelShortLabel,
 } from "../../../utils/modelOptions";
+import { customProviderLogo, getProviderLogo } from "../../../assets/providers";
 import ContextWindowRing from "./ContextWindowRing";
 import SkillPickerPopover from "./SkillPickerPopover";
 import ExpertPickerPopover from "./ExpertPickerPopover";
 import SubagentPickerPopover from "./SubagentPickerPopover";
 import ConnectorPickerPopover from "./ConnectorPickerPopover";
 import KnowledgePickerPopover from "./KnowledgePickerPopover";
+import ConversationModePicker from "./ConversationModePicker";
+import HitlPolicyPicker from "./HitlPolicyPicker";
 import SlashCommandMenu from "./SlashCommandMenu";
 import type { SlashMenuGroup } from "../../../utils/slashCategories";
 import type { SlashMenuItem } from "../hooks/useSlashMentionInput";
+import type { HitlSessionPolicy } from "../utils/hitlSessionPolicy";
 import { SHORTCUT_ICON_TONE_CLASS } from "../utils/slashShortcutStyles";
 import { isSttAvailable } from "../../../hooks/useVoiceInput";
 import { resolveTurnModelOverride } from "../utils/chatMessages";
@@ -65,12 +71,29 @@ type CompactPickerKey =
   | "subagent"
   | "shortcut";
 
+function resolveModelLogo(model: {
+  provider_name: string;
+  provider_kind: string;
+}): string {
+  const name = model.provider_name;
+  const slug = name.toLowerCase().replace(/\s+/g, "-");
+  return (
+    getProviderLogo(name) ??
+    getProviderLogo(name.toLowerCase()) ??
+    getProviderLogo(slug) ??
+    getProviderLogo(model.provider_kind) ??
+    customProviderLogo
+  );
+}
+
 // These browser APIs never change at runtime — compute once.
 const _sttAvailable = isSttAvailable();
 
 interface ChatInputActionsRowProps {
   isMobile: boolean;
   isStreaming: boolean;
+  /** Team host room — stop control uses clearer wording. */
+  isTeam?: boolean;
   disabled?: boolean;
   canSend: boolean;
   text: string;
@@ -98,6 +121,10 @@ interface ChatInputActionsRowProps {
     mode: "auto" | "enabled" | "disabled",
     effort: string | null,
   ) => void;
+  conversationMode?: "ask" | "plan" | "craft";
+  onConversationModeChange?: (mode: "ask" | "plan" | "craft") => void;
+  hitlPolicy?: HitlSessionPolicy;
+  onHitlPolicyChange?: (policy: HitlSessionPolicy) => void;
   availableConnectors?: {
     mcp_server_name: string;
     label: string;
@@ -128,6 +155,7 @@ interface ChatInputActionsRowProps {
 export default function ChatInputActionsRow({
   isMobile,
   isStreaming,
+  isTeam = false,
   disabled,
   canSend,
   text,
@@ -152,6 +180,10 @@ export default function ChatInputActionsRow({
   reasoningMode = "auto",
   reasoningEffort = null,
   onReasoningChange,
+  conversationMode = "craft",
+  onConversationModeChange,
+  hitlPolicy,
+  onHitlPolicyChange,
   availableConnectors,
   selectedConnectors = [],
   onConnectorsChange,
@@ -176,6 +208,7 @@ export default function ChatInputActionsRow({
 }: ChatInputActionsRowProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const remoteManaged = Boolean(agentId?.startsWith("bridge:"));
   const skillDisplayName = useSkillDisplayName();
   const actionsRowRef = useRef<HTMLDivElement | null>(null);
   const [isCompact, setIsCompact] = useState(false);
@@ -226,18 +259,25 @@ export default function ChatInputActionsRow({
   );
   const reasoningCapability = selectedModelInfo?.reasoning_config;
   const reasoningIsStatusOnly = reasoningCapability?.adapter === "status_only";
+  const allowWriteTools = conversationMode === "craft";
   const showConnectorPicker = Boolean(
-    availableConnectors && onConnectorsChange,
+    allowWriteTools && availableConnectors && onConnectorsChange,
   );
   const showKnowledgePicker = Boolean(
     availableKnowledgeBases && onKnowledgeBaseIdsChange,
   );
-  const showSkillPicker = Boolean(availableSkills && onInsertSkillCommand);
+  const showSkillPicker = Boolean(
+    allowWriteTools && availableSkills && onInsertSkillCommand,
+  );
   const showExpertPicker = Boolean(
-    availableExperts && onInsertExpertMention && availableExperts.length > 0,
+    allowWriteTools &&
+      availableExperts &&
+      onInsertExpertMention &&
+      availableExperts.length > 0,
   );
   const showSubagentPicker = Boolean(
-    availableSubagents &&
+    allowWriteTools &&
+      availableSubagents &&
       onInsertSubagentMention &&
       availableSubagents.length > 0,
   );
@@ -315,6 +355,24 @@ export default function ChatInputActionsRow({
       : mode === "enabled"
       ? t("chat.reasoningEnabled", "开启")
       : t("chat.reasoningDisabled", "关闭");
+
+  const selectedModelTriggerLabel = selectedModel
+    ? modelOptionLabel(
+        availableModels?.find((m) => modelOptionValue(m) === selectedModel) ?? {
+          provider_name: selectedModel.split("/")[0] || "",
+          model: selectedModel.split("/").slice(1).join("/") || selectedModel,
+        },
+      )
+    : t("chat.selectModel", "Select model");
+  const selectedModelReasoningHint =
+    selectedModel && reasoningCapability
+      ? reasoningIsStatusOnly
+        ? t("chat.reasoningAlways", "始终推理")
+        : reasoningEffort || reasoningModeLabel(reasoningMode)
+      : null;
+  const modelTriggerTitle = selectedModelReasoningHint
+    ? `${selectedModelTriggerLabel} · ${selectedModelReasoningHint}`
+    : selectedModelTriggerLabel;
 
   const reasoningSummary = (model: ResolvedModel, active: boolean) => {
     const capability = model.reasoning_config;
@@ -431,8 +489,11 @@ export default function ChatInputActionsRow({
                 setModelPickerOpen(false);
               }}
             >
-              <span className={styles.modelMenuLabel}>
-                {t("chat.modelAuto", "Auto")}
+              <span className={styles.modelMenuTitle}>
+                <Route size={16} aria-hidden />
+                <span className={styles.modelMenuLabel}>
+                  {t("chat.modelAuto", "Auto")}
+                </span>
               </span>
               <span className={styles.modelMenuHint}>
                 {t("chat.modelAutoHint", "Use agent default")}
@@ -459,6 +520,11 @@ export default function ChatInputActionsRow({
                       setModelPickerOpen(false);
                     }}
                   >
+                    <img
+                      src={resolveModelLogo(model)}
+                      alt=""
+                      className={styles.modelMenuIcon}
+                    />
                     <span className={styles.modelMenuLabel}>
                       {modelOptionLabel(model)}
                     </span>
@@ -487,15 +553,29 @@ export default function ChatInputActionsRow({
           <div className={styles.modelMenuDivider} />
           <button
             type="button"
-            className={styles.modelMenuFooter}
+            className={`${styles.modelMenuFooter} ${
+              remoteManaged ? styles.modelMenuFooterMuted : ""
+            }`}
             onClick={() => {
+              if (remoteManaged) {
+                message.info(t("chat.remoteExpert.manageToast"));
+                return;
+              }
               closeCompactPicker();
               setModelPickerOpen(false);
               navigate("/admin/models");
             }}
           >
-            <Cpu size={15} aria-hidden />
-            <span>{t("chat.modelPickerManage")}</span>
+            {remoteManaged ? (
+              <Info size={15} aria-hidden />
+            ) : (
+              <Cpu size={15} aria-hidden />
+            )}
+            <span>
+              {remoteManaged
+                ? t("chat.remoteExpert.manageOnPeer")
+                : t("chat.modelPickerManage")}
+            </span>
           </button>
         </div>
       )}
@@ -679,6 +759,7 @@ export default function ChatInputActionsRow({
             selectedKnowledgeBaseIds={selectedKnowledgeBaseIds}
             onKnowledgeBaseIdsChange={onKnowledgeBaseIdsChange!}
             onNavigateAway={closeCompactPicker}
+            remoteManaged={remoteManaged}
           />
         );
       case "skill":
@@ -691,6 +772,7 @@ export default function ChatInputActionsRow({
               closeCompactPicker();
             }}
             onNavigateAway={closeCompactPicker}
+            remoteManaged={remoteManaged}
           />
         );
       case "expert":
@@ -700,6 +782,7 @@ export default function ChatInputActionsRow({
             selectedAgentIds={mentionedExperts}
             onSelect={handleExpertSelect}
             onNavigateAway={closeCompactPicker}
+            remoteManaged={remoteManaged}
           />
         );
       case "subagent":
@@ -709,6 +792,7 @@ export default function ChatInputActionsRow({
             selectedSlugs={mentionedSubagents}
             onSelect={handleSubagentSelect}
             onNavigateAway={closeCompactPicker}
+            remoteManaged={remoteManaged}
           />
         );
       case "shortcut":
@@ -744,6 +828,7 @@ export default function ChatInputActionsRow({
               : ""
           }`}
           type="button"
+          aria-label={modelTriggerTitle}
           onClick={isMobile ? () => setCompactPicker("model") : undefined}
         >
           <Cpu size={16} />
@@ -766,6 +851,18 @@ export default function ChatInputActionsRow({
 
       return (
         <>
+          {onConversationModeChange && (
+            <ConversationModePicker
+              conversationMode={conversationMode}
+              onChange={onConversationModeChange}
+            />
+          )}
+          {onHitlPolicyChange && (
+            <HitlPolicyPicker
+              policy={hitlPolicy ?? { mode: "ask" }}
+              onChange={onHitlPolicyChange}
+            />
+          )}
           {showModelPicker &&
             (isMobile ? (
               modelButton
@@ -851,6 +948,18 @@ export default function ChatInputActionsRow({
 
     return (
       <>
+        {onConversationModeChange && (
+          <ConversationModePicker
+            conversationMode={conversationMode}
+            onChange={onConversationModeChange}
+          />
+        )}
+        {onHitlPolicyChange && (
+          <HitlPolicyPicker
+            policy={hitlPolicy ?? { mode: "ask" }}
+            onChange={onHitlPolicyChange}
+          />
+        )}
         {showModelPicker && (
           <Popover
             trigger="click"
@@ -863,46 +972,17 @@ export default function ChatInputActionsRow({
             overlayClassName={styles.modelPopover}
             content={modelMenu}
           >
-            <Tooltip
-              title={
-                selectedModel
-                  ? modelOptionLabel(
-                      availableModels!.find(
-                        (m) => modelOptionValue(m) === selectedModel,
-                      ) ?? {
-                        provider_name: selectedModel.split("/")[0] || "",
-                        model:
-                          selectedModel.split("/").slice(1).join("/") ||
-                          selectedModel,
-                      },
-                    )
-                  : t("chat.selectModel", "Select model")
-              }
-              mouseEnterDelay={0.4}
-            >
+            <Tooltip title={modelTriggerTitle} mouseEnterDelay={0.4}>
               <button
-                className={`${styles.secondaryBtn} ${styles.modelPickerBtn} ${
+                className={`${styles.secondaryBtn} ${
                   modelOverride || reasoningMode !== "auto" || reasoningEffort
                     ? styles.secondaryBtnModelActive
                     : ""
                 }`}
                 type="button"
+                aria-label={modelTriggerTitle}
               >
                 <Cpu size={16} />
-                <span className={styles.modelPickerLabel}>
-                  {selectedModel
-                    ? modelShortLabel(selectedModel)
-                    : t("chat.modelAuto", "Auto")}
-                  {selectedModel && reasoningCapability && (
-                    <span className={styles.modelPickerReasoningLabel}>
-                      {` · ${
-                        reasoningIsStatusOnly
-                          ? t("chat.reasoningAlways", "始终推理")
-                          : reasoningEffort || reasoningModeLabel(reasoningMode)
-                      }`}
-                    </span>
-                  )}
-                </span>
               </button>
             </Tooltip>
           </Popover>
@@ -953,6 +1033,7 @@ export default function ChatInputActionsRow({
                 selectedKnowledgeBaseIds={selectedKnowledgeBaseIds}
                 onKnowledgeBaseIdsChange={onKnowledgeBaseIdsChange!}
                 onNavigateAway={() => setKnowledgePickerOpen(false)}
+                remoteManaged={remoteManaged}
               />
             }
           >
@@ -991,6 +1072,7 @@ export default function ChatInputActionsRow({
                   setSkillPickerOpen(false);
                 }}
                 onNavigateAway={() => setSkillPickerOpen(false)}
+                remoteManaged={remoteManaged}
               />
             }
           >
@@ -1024,6 +1106,7 @@ export default function ChatInputActionsRow({
                 selectedAgentIds={mentionedExperts}
                 onSelect={handleExpertSelect}
                 onNavigateAway={() => setExpertPickerOpen(false)}
+                remoteManaged={remoteManaged}
               />
             }
           >
@@ -1061,6 +1144,7 @@ export default function ChatInputActionsRow({
                 selectedSlugs={mentionedSubagents}
                 onSelect={handleSubagentSelect}
                 onNavigateAway={() => setSubagentPickerOpen(false)}
+                remoteManaged={remoteManaged}
               />
             }
           >
@@ -1273,11 +1357,28 @@ export default function ChatInputActionsRow({
               </button>
             </Tooltip>
           ) : (
-            <Tooltip title={t("chat.stop", "Stop")} mouseEnterDelay={0.4}>
+            <Tooltip
+              title={
+                isTeam
+                  ? t("chat.stopTeamHint", {
+                      defaultValue:
+                        "停止本轮生成；已开始的成员回复可能仍会继续推送",
+                    })
+                  : t("chat.stop", "Stop")
+              }
+              mouseEnterDelay={0.4}
+            >
               <button
                 className={`${styles.sendBtn} ${styles.cancelBtn}`}
                 onClick={onCancel}
-                title={t("chat.stop", "Stop")}
+                title={
+                  isTeam
+                    ? t("chat.stopTeamHint", {
+                        defaultValue:
+                          "停止本轮生成；已开始的成员回复可能仍会继续推送",
+                      })
+                    : t("chat.stop", "Stop")
+                }
                 type="button"
                 aria-label={t("chat.stop", "Stop")}
               >

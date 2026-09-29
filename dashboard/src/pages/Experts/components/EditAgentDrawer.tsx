@@ -76,6 +76,7 @@ import {
 } from "./agentBackendForm";
 import AgentBackendFields from "./AgentBackendFields";
 import ExpertComposerDefaultsFields from "./ExpertComposerDefaultsFields";
+import SkillCatalogDrawer from "./SkillCatalogDrawer";
 import SubagentCatalogDrawer from "./SubagentCatalogDrawer";
 import styles from "../index.module.less";
 
@@ -250,6 +251,7 @@ function EditAgentDrawerBody({
   );
   const [listRenameSaving, setListRenameSaving] = useState(false);
   const [subagentCatalogOpen, setSubagentCatalogOpen] = useState(false);
+  const [skillCatalogOpen, setSkillCatalogOpen] = useState(false);
   const welcomeConfigRef = useRef<WelcomeConfigRef>(null);
 
   const installedSubagentSlugs = useMemo(
@@ -1003,9 +1005,33 @@ function EditAgentDrawerBody({
                   },
                   {
                     key: "skills",
-                    label: t("experts.skillFilesTitle", {
-                      count: agentSkills.length,
-                    }),
+                    label: (
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          width: "100%",
+                        }}
+                      >
+                        <span>
+                          {t("experts.skillFilesTitle", {
+                            count: agentSkills.length,
+                          })}
+                        </span>
+                        <Button
+                          type="link"
+                          size="small"
+                          style={{ padding: 0, height: "auto" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSkillCatalogOpen(true);
+                          }}
+                        >
+                          {t("experts.manageSkills")}
+                        </Button>
+                      </div>
+                    ),
                     children: (
                       <>
                         <p
@@ -1015,7 +1041,7 @@ function EditAgentDrawerBody({
                             margin: "0 0 8px",
                           }}
                         >
-                          {t("experts.skillFilesHint")}
+                          {t("experts.skillFilesEditHint")}
                         </p>
                         <div className={styles.fileList}>
                           {agentSkills.length === 0 ? (
@@ -1256,6 +1282,14 @@ function EditAgentDrawerBody({
         onClose={() => setSubagentCatalogOpen(false)}
         onInstalled={() => {
           void reloadSubagents();
+        }}
+      />
+      <SkillCatalogDrawer
+        agentId={agent.agent_id}
+        open={skillCatalogOpen}
+        onClose={() => {
+          setSkillCatalogOpen(false);
+          void reloadSkills();
         }}
       />
       <Modal
